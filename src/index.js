@@ -12,8 +12,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
   origin: [
     'http://localhost:5173',   // Vite dev server
-    'http://localhost:3000',
-    'https://spendguardian-frontend.vercel.app/',  // Vercel production frontend
+    'https://spendguardian-frontend.vercel.app/',
   ],
   credentials: true,
 }));
