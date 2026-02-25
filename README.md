@@ -1,365 +1,145 @@
-# SpendGuardian — Backend API
+# SpendGuardian — Backend
 
-Node.js + Express backend for SpendGuardian. Handles file parsing, chart suggestion, and Firebase integration.
+> REST API powering SpendGuardian — a personal finance dashboard that parses Excel/CSV files into interactive charts.
 
----
+Built with Node.js, Express, and Firebase. Handles file parsing, cloud storage, Firestore data management, and JWT-authenticated API endpoints.
 
-## 📁 Project Structure
-
-```
-spendguardian-backend/
-├── src/
-│   ├── index.js                  # Express app entry point
-│   ├── firebase.js               # Firebase Admin SDK init
-│   ├── middleware/
-│   │   ├── auth.js               # Firebase token verification
-│   │   └── upload.js             # Multer file upload config
-│   ├── routes/
-│   │   └── api.js                # All API endpoints
-│   └── services/
-│       ├── sheetParser.js        # SheetJS parsing + type inference
-│       └── chartSuggester.js     # Chart recommendation engine
-├── .env.example
-├── .gitignore
-└── package.json
-```
+**Frontend repo:** *(link here)*
 
 ---
 
-## ⚙️ Setup Instructions
+## What It Does
 
-### 1. Clone / enter the folder
+1. Accepts `.xlsx`, `.xls`, and `.csv` file uploads
+2. Parses them server-side — detects column types (Date, Currency, Number, Category, etc.), skips title rows, evaluates Excel formula results
+3. Stores raw files and parsed JSON in **Firebase Storage**
+4. Saves sheet metadata and user/project structure in **Firestore**
+5. Suggests appropriate chart types based on column analysis
+6. Exposes a secure REST API — every endpoint requires a valid Firebase Auth JWT
 
-```bash
-cd spendguardian-backend
-```
+---
 
-### 2. Install dependencies
+## Tech Stack
 
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 18+ |
+| Framework | Express.js |
+| Database | Firebase Firestore |
+| File Storage | Firebase Storage |
+| Auth | Firebase Admin SDK (JWT verification) |
+| File Parsing | SheetJS (xlsx) |
+| File Uploads | Multer (memory storage) |
+
+---
+
+## API Overview
+
+### Auth
+All endpoints require `Authorization: Bearer <Firebase ID Token>`.
+
+### Users
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/users/me` | Register user profile (idempotent — safe on every login) |
+| `GET` | `/api/users/me` | Get current user profile |
+| `PATCH` | `/api/users/me` | Update preferences (currency, display name, etc.) |
+| `DELETE` | `/api/users/me` | Delete account + all data (cascade) |
+
+### Projects
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/projects` | Create a project |
+| `GET` | `/api/projects` | List user's projects |
+| `DELETE` | `/api/projects/:id` | Delete project + all sheets |
+
+### Sheets
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/parse` | Parse file preview (no DB write) |
+| `POST` | `/api/ingest` | Full parse → Storage → Firestore |
+| `GET` | `/api/projects/:id/sheets` | List sheets for a project |
+| `GET` | `/api/sheet/:id/data` | Get full row data for a sheet |
+| `PUT` | `/api/sheet/:id/data` | Save edited row/column data |
+| `DELETE` | `/api/sheet/:id` | Delete sheet + storage files |
+
+### Charts
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/suggest-charts` | Suggest chart types from column metadata |
+
+---
+
+## Getting Started
+
+### Prerequisites
+- Node.js 18+
+- A Firebase project with Firestore and Storage enabled
+- Firebase service account key (JSON)
+
+### 1. Install dependencies
 ```bash
 npm install
 ```
 
-### 3. Set up Firebase
-
-1. Go to [Firebase Console](https://console.firebase.google.com) → Create a project called **spendguardian**
-2. Enable **Firestore Database** (start in test mode)
-3. Enable **Firebase Storage** (start in test mode)
-4. Go to **Project Settings → Service Accounts → Generate new private key**
-5. This downloads a JSON file. You'll use values from it in your `.env`
-
-### 4. Create your `.env` file
-
+### 2. Configure environment
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in your values from the downloaded service account JSON:
-
+Fill in your `.env`:
 ```env
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
+GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
 PORT=5000
-FIREBASE_PROJECT_ID=spendguardian-xxxxx
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@spendguardian-xxxxx.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_ACTUAL_KEY\n-----END PRIVATE KEY-----\n"
-FIREBASE_STORAGE_BUCKET=spendguardian-xxxxx.appspot.com
 ```
 
-> ⚠️ The private key must be wrapped in double quotes and keep the literal `\n` characters exactly as they appear in the JSON file.
+Download your service account key from **Firebase Console → Project Settings → Service accounts → Generate new private key** and save it as `serviceAccountKey.json` in the project root.
 
-### 5. Start the server
+> ⚠️ Never commit `serviceAccountKey.json` or `.env` — both are in `.gitignore`.
 
+### 3. Run in development
 ```bash
-# Development (auto-restarts on save)
 npm run dev
-
-# Production
-npm start
-```
-
-You should see:
-```
-✅ SpendGuardian API running on http://localhost:5000
+# → SpendGuardian API running on http://localhost:5000
 ```
 
 ---
 
-## 🧪 Testing with Postman
+## Key Implementation Details
 
-### Step 0 — Get a Firebase ID Token (for auth)
+**Formula evaluation** — Excel files often use formulas like `=C5-B5`. SheetJS reads cached formula results rather than formula strings, so users see real values.
 
-Since all endpoints (except `/health`) require a valid Firebase ID token, you need one for testing.
+**Smart header detection** — The parser scans the first 10 rows and selects the row with the most filled cells as the header row. This correctly handles files with title rows, subtitle rows, or blank rows above the real column names.
 
-**Easiest way — use Firebase REST API:**
+**Section row filtering** — Decorative rows like `▸ INCOME` or `TOTAL` (where only the first cell is filled with non-numeric text) are automatically excluded from data rows.
+
+**Ownership chain** — Every endpoint validates both that the user doc exists and that the requested resource belongs to them. No resource can be accessed or modified by a different user.
+
+**No composite Firestore indexes required** — Queries use a single `where` clause and sort results in JavaScript, avoiding the need to configure Firestore indexes manually.
+
+---
+
+## Data Model
 
 ```
-POST https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=YOUR_WEB_API_KEY
-```
+users/{uid}
+  - uid, email, displayName, currency, dateFormat
+  - lastActiveProject
 
-Body (raw JSON):
-```json
-{
-  "email": "test@example.com",
-  "password": "testpassword123",
-  "returnSecureToken": true
-}
-```
+  └── (separate collection) projects/{projectId}
+        - id, ownerId, name, currency, sheetCount
 
-> Get your **Web API Key** from Firebase Console → Project Settings → General.
-> First create the user in Firebase Console → Authentication → Add user.
-
-Copy the `idToken` from the response. Use it as:
-```
-Authorization: Bearer <idToken>
+        └── sheets/{sheetId}
+              - id, projectId, ownerId, fileName
+              - columns[], rowCount
+              - storageUrl, parsedDataUrl
 ```
 
 ---
 
-### Endpoint 1 — Health Check
+## Author
 
-```
-GET http://localhost:5000/api/health
-```
-
-No auth required.
-
-**Expected response:**
-```json
-{
-  "status": "ok",
-  "timestamp": "2025-01-01T00:00:00.000Z"
-}
-```
-
----
-
-### Endpoint 2 — Parse a File
-
-```
-POST http://localhost:5000/api/parse
-```
-
-**Headers:**
-```
-Authorization: Bearer <your_id_token>
-```
-
-**Body:** `form-data`
-| Key | Type | Value |
-|-----|------|-------|
-| file | File | Select your .xlsx or .csv file |
-| selectedSheet | Text | (optional) Sheet tab name |
-
-**Expected response:**
-```json
-{
-  "success": true,
-  "fileName": "budget.xlsx",
-  "fileSize": 12345,
-  "sheetNames": ["Sheet1", "Sheet2"],
-  "selectedSheet": "Sheet1",
-  "rowCount": 24,
-  "columns": [
-    { "name": "Date", "type": "Date", "sample": ["Jan 2024", "Feb 2024"] },
-    { "name": "Amount", "type": "Currency", "sample": ["$1,200", "$980"] },
-    { "name": "Category", "type": "Category", "sample": ["Food", "Rent"] }
-  ],
-  "preview": [
-    { "Date": "Jan 2024", "Amount": "$1,200", "Category": "Food" },
-    ...
-  ]
-}
-```
-
----
-
-### Endpoint 3 — Suggest Charts
-
-```
-POST http://localhost:5000/api/suggest-charts
-```
-
-**Headers:**
-```
-Authorization: Bearer <your_id_token>
-Content-Type: application/json
-```
-
-**Body:** raw JSON
-```json
-{
-  "columns": [
-    { "name": "Date", "type": "Date" },
-    { "name": "Amount", "type": "Currency" },
-    { "name": "Category", "type": "Category" }
-  ]
-}
-```
-
-**Expected response:**
-```json
-{
-  "success": true,
-  "charts": [
-    {
-      "id": "line_Date_Amount",
-      "chartType": "line",
-      "title": "Amount Over Time",
-      "xColumn": "Date",
-      "yColumn": "Amount",
-      "description": "Trend of Amount by Date"
-    },
-    {
-      "id": "bar_Category_Amount",
-      "chartType": "bar",
-      "title": "Amount by Category",
-      ...
-    }
-  ],
-  "statCards": [
-    {
-      "id": "stats_Amount",
-      "chartType": "stats",
-      "title": "Amount Summary",
-      "yColumn": "Amount"
-    }
-  ]
-}
-```
-
----
-
-### Endpoint 4 — Ingest a File (saves to Firebase)
-
-```
-POST http://localhost:5000/api/ingest
-```
-
-**Headers:**
-```
-Authorization: Bearer <your_id_token>
-```
-
-**Body:** `form-data`
-| Key | Type | Value |
-|-----|------|-------|
-| file | File | Your .xlsx / .csv |
-| projectId | Text | A valid Firestore project doc ID |
-| selectedSheet | Text | (optional) |
-| columnOverrides | Text | (optional) JSON string e.g. `{"MyCol":"Category"}` |
-
-> ⚠️ You need an existing project document in Firestore first. Create one manually in the Firebase Console under the `projects` collection with any ID.
-
-**Expected response:**
-```json
-{
-  "success": true,
-  "sheetId": "uuid-here",
-  "rowCount": 24,
-  "columns": [...],
-  "preview": [...]
-}
-```
-
----
-
-### Endpoint 5 — Get Sheet Data
-
-```
-GET http://localhost:5000/api/sheet/<sheetId>/data?projectId=<projectId>
-```
-
-**Headers:**
-```
-Authorization: Bearer <your_id_token>
-```
-
-**Expected response:**
-```json
-{
-  "success": true,
-  "sheetId": "...",
-  "rowCount": 24,
-  "columns": [...],
-  "rows": [
-    { "Date": "Jan 2024", "Amount": "$1,200", "Category": "Food" },
-    ...
-  ]
-}
-```
-
----
-
-### Endpoint 6 — Delete a Sheet
-
-```
-DELETE http://localhost:5000/api/sheet/<sheetId>
-```
-
-**Headers:**
-```
-Authorization: Bearer <your_id_token>
-Content-Type: application/json
-```
-
-**Body:** raw JSON
-```json
-{
-  "projectId": "your-project-id"
-}
-```
-
-**Expected response:**
-```json
-{
-  "success": true,
-  "message": "Sheet deleted successfully"
-}
-```
-
----
-
-## 📋 Sample Spreadsheet for Testing
-
-Create a simple CSV file called `test_budget.csv`:
-
-```
-Date,Category,Amount,Notes
-Jan 2024,Food,$450,Groceries
-Jan 2024,Rent,$1200,Monthly rent
-Jan 2024,Transport,$80,Bus pass
-Feb 2024,Food,$390,Groceries
-Feb 2024,Rent,$1200,Monthly rent
-Feb 2024,Transport,$95,Uber
-Mar 2024,Food,$510,Groceries and dining
-Mar 2024,Rent,$1200,Monthly rent
-Mar 2024,Transport,$60,Bus pass
-```
-
-This will trigger:
-- A **Line chart** (Date + Amount)
-- A **Bar chart** (Category + Amount)  
-- A **Pie chart** (Category + Amount, 3 unique categories ≤ 10)
-- A **Stat card** for Amount
-
----
-
-## 🚀 Deployment (Railway)
-
-1. Push this folder to a GitHub repo
-2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
-3. Add all environment variables from your `.env` in Railway's Variables tab
-4. Railway auto-detects Node.js and runs `npm start`
-5. Note the generated URL — you'll use it as `VITE_API_URL` in the frontend
-
----
-
-## ✅ Recommended Postman Testing Order
-
-1. `GET /api/health` — confirm server is up
-2. Get a Firebase ID token (see Step 0)
-3. `POST /api/parse` — upload test CSV, check column detection
-4. `POST /api/suggest-charts` — pass columns from parse response
-5. Create a project in Firestore manually
-6. `POST /api/ingest` — full ingest, note the returned sheetId
-7. `GET /api/sheet/:id/data` — retrieve the ingested data
-8. `DELETE /api/sheet/:id` — clean up
+**Chanka Herath**  
+[GitHub](https://github.com/chanka-herath2001) · [LinkedIn](https://www.linkedin.com/in/chanka-herath/)
