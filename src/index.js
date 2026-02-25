@@ -13,7 +13,7 @@ app.use(cors({
   origin: [
     'http://localhost:5173',   // Vite dev server
     'http://localhost:3000',
-    /\.vercel\.app$/,          // Any Vercel preview deploy
+    'https://spendguardian-frontend.vercel.app/',  // Vercel production frontend
   ],
   credentials: true,
 }));
